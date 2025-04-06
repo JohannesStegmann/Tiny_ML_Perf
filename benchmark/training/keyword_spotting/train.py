@@ -7,7 +7,11 @@ import argparse
 from tensorflow import keras
 
 import keras_model as models
+import sys
+# sys.path.append(r"C:\Users\jos2\Documents\tiny-master\benchmark\training\keyword_spotting")  # Add the directory to sys.path
 import get_dataset as kws_data
+
+
 import kws_util
 
 num_classes = 12 # should probably draw this directly from the dataset.
@@ -39,14 +43,14 @@ if __name__ == '__main__':
     print(f"Starting with pre-trained model from {Flags.model_init_path}")
     model = keras.models.load_model(Flags.model_init_path)
 
-  # model.summary()
+  model.summary()
   
-  # callbacks = kws_util.get_callbacks(args=Flags)
-  # train_hist = model.fit(ds_train, validation_data=ds_val, epochs=Flags.epochs, callbacks=callbacks)
-  # kws_util.plot_training(Flags.plot_dir,train_hist)
-  # model.save(Flags.saved_model_path)
+  callbacks = kws_util.get_callbacks(args=Flags)
+  train_hist = model.fit(ds_train, validation_data=ds_val, epochs=Flags.epochs, callbacks=callbacks)
+  kws_util.plot_training(Flags.plot_dir,train_hist)
+  model.save(Flags.saved_model_path)
   
-  # if Flags.run_test_set:
-  #   test_scores = model.evaluate(ds_test)
-  #   print("Test loss:", test_scores[0])
-  #   print("Test accuracy:", test_scores[1])
+  if Flags.run_test_set:
+    test_scores = model.evaluate(ds_test)
+    print("Test loss:", test_scores[0])
+    print("Test accuracy:", test_scores[1])

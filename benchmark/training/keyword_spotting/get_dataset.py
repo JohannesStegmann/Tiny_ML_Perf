@@ -8,11 +8,13 @@ from tensorflow.keras import layers
 from tensorflow.python.platform import gfile
 
 import functools
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 import os, pickle
 
+# sys.path.append(r"C:\Users\jos2\Documents\tiny-master\benchmark\training\keyword_spotting")  # Add the directory to sys.path
 import kws_util
 import keras_model as models
 
@@ -21,7 +23,33 @@ word_labels = ["Down", "Go", "Left", "No", "Off", "On", "Right",
 
 ## Normalises to a 10 bit range.
 def normalise_10_bit(value):
-    return np.round((value/np.max(abs(value))*512))
+    # Normalize the value to the range [0, 511] 
+    norm_10_bit = tf.round((value / tf.reduce_max(value)) * 511)
+    
+    # Ensure the value doesn't exceed the maximum of 511 or go below -512
+    norm_10_bit = tf.maximum(norm_10_bit, -512)
+
+    return norm_10_bit
+def normalise_sample(audio, label):
+    
+    # Remove the last dimension (1) to get shape (61, 13)
+    mfcc_features = tf.squeeze(audio) 
+    # Apply the normalization function 
+    normalised_mfcc = normalise_10_bit(mfcc_features)
+
+    # Expand the dimensions back to (61, 13, 1)
+    modified_arr = tf.expand_dims(normalised_mfcc, axis=-1)
+
+    return modified_arr, label
+
+def tf_normalise_10_bit(value):
+    # Normalize the value to the range [0, 511] 
+    norm_10_bit = tf.round((value / tf.reduce_max(value)) * 511)
+    
+    # # Ensure the value doesn't exceed the maximum of 511 or go below -512
+    norm_10_bit = tf.maximum(norm_10_bit, -512)
+
+    return norm_10_bit
 
 def convert_to_int16(sample_dict):
   audio = sample_dict['audio']
@@ -67,18 +95,16 @@ def get_preprocess_audio_func(model_settings,is_training=False,background_data =
     background_volume_range_= model_settings['background_volume_range_']
 
     wav_decoder = tf.cast(next_element['audio'], tf.float32)
-    if model_settings['feature_type'] != "td_samples":
-      wav_decoder = wav_decoder/tf.reduce_max(wav_decoder)
-    else:
-      wav_decoder = wav_decoder/tf.constant(2**15,dtype=tf.float32)
+    # if model_settings['feature_type'] != "td_samples":
+    #   wav_decoder = wav_decoder/tf.reduce_max(wav_decoder)
+    # else:
+    
+    wav_decoder = tf.round((wav_decoder/tf.constant(2**15,dtype=tf.float32))*tf.constant(511,dtype=tf.float32)) ##Scale for a 10 bit input range
     #Previously, decode_wav was used with desired_samples as the length of array. The
     # default option of this function was to pad zeros if the desired samples are not found
     wav_decoder = tf.pad(wav_decoder,[[0,desired_samples-tf.shape(wav_decoder)[-1]]]) 
-    # Allow the audio sample's volume to be adjusted.
-    foreground_volume_placeholder_ = tf.constant(1,dtype=tf.float32)
-    
-    scaled_foreground = tf.multiply(wav_decoder,
-                                    foreground_volume_placeholder_)
+    scaled_foreground = wav_decoder
+
     # Shift the sample's start position, and pad any gaps with zeros.
     time_shift_padding_placeholder_ = tf.constant([[2,2]], tf.int32)
     time_shift_offset_placeholder_ = tf.constant([2],tf.int32)
@@ -86,32 +112,32 @@ def get_preprocess_audio_func(model_settings,is_training=False,background_data =
     padded_foreground = tf.pad(scaled_foreground, time_shift_padding_placeholder_, mode='CONSTANT')
     sliced_foreground = tf.slice(padded_foreground, time_shift_offset_placeholder_, [desired_samples])
   
-    if is_training and background_data != []:
-      background_volume_range = tf.constant(background_volume_range_,dtype=tf.float32)
-      background_index = np.random.randint(len(background_data))
-      background_samples = background_data[background_index]
-      background_offset = np.random.randint(0, len(background_samples) - desired_samples)
-      background_clipped = background_samples[background_offset:(background_offset + desired_samples)]
-      background_clipped = tf.squeeze(background_clipped)
-      background_reshaped = tf.pad(background_clipped,[[0,desired_samples-tf.shape(wav_decoder)[-1]]])
-      background_reshaped = tf.cast(background_reshaped, tf.float32)
-      if np.random.uniform(0, 1) < background_frequency:
-        background_volume = np.random.uniform(0, background_volume_range_)
-      else:
-        background_volume = 0
-      background_volume_placeholder_ = tf.constant(background_volume,dtype=tf.float32)
-      background_data_placeholder_ = background_reshaped
-      background_mul = tf.multiply(background_data_placeholder_,
-                           background_volume_placeholder_)
-      background_add = tf.add(background_mul, sliced_foreground)
-      sliced_foreground = tf.clip_by_value(background_add, -1.0, 1.0)
+    # if is_training and background_data != []:
+    #   background_volume_range = tf.constant(background_volume_range_,dtype=tf.float32)
+    #   background_index = np.random.randint(len(background_data))
+    #   background_samples = background_data[background_index]
+    #   background_offset = np.random.randint(0, len(background_samples) - desired_samples)
+    #   background_clipped = background_samples[background_offset:(background_offset + desired_samples)]
+    #   background_clipped = tf.squeeze(background_clipped)
+    #   background_reshaped = tf.pad(background_clipped,[[0,desired_samples-tf.shape(wav_decoder)[-1]]])
+    #   background_reshaped = tf.cast(background_reshaped, tf.float32)
+    #   if np.random.uniform(0, 1) < background_frequency:
+    #     background_volume = np.random.uniform(0, background_volume_range_)
+    #   else:
+    #     background_volume = 0
+    #   background_volume_placeholder_ = tf.constant(background_volume,dtype=tf.float32)
+    #   background_data_placeholder_ = background_reshaped
+    #   background_mul = tf.multiply(background_data_placeholder_,
+    #                        background_volume_placeholder_)
+    #   background_add = tf.add(background_mul, sliced_foreground)
+    #   sliced_foreground = tf.clip_by_value(background_add, -1.0, 1.0)
     
     if model_settings['feature_type'] == 'mfcc':
       stfts = tf.signal.stft(sliced_foreground, frame_length=model_settings['window_size_samples'], 
                          frame_step=model_settings['window_stride_samples'], fft_length=None,
                          window_fn=tf.signal.hamming_window
                          )
-      spectrograms = tf.abs(stfts)
+      spectrograms = (tf.abs(stfts)**2)/512
       num_spectrogram_bins = stfts.shape[-1]
       # default values used by contrib_audio.mfcc as shown here
       # https://kite.com/python/docs/tensorflow.contrib.slim.rev_block_lib.contrib_framework_ops.audio_ops.mfcc
@@ -122,7 +148,7 @@ def get_preprocess_audio_func(model_settings,is_training=False,background_data =
       mel_spectrograms = tf.tensordot(spectrograms, linear_to_mel_weight_matrix, 1)
       mel_spectrograms.set_shape(spectrograms.shape[:-1].concatenate(linear_to_mel_weight_matrix.shape[-1:]))
       # Compute a stabilized log to get log-magnitude mel-scale spectrograms.
-      log_mel_spectrograms = tf.math.log(mel_spectrograms + 1e-6)
+      log_mel_spectrograms = tf.math.log(mel_spectrograms + 1e-3)
       # Compute MFCCs from log_mel_spectrograms and take the first 13.
       mfccs = tf.signal.mfccs_from_log_mel_spectrograms(log_mel_spectrograms)[..., :model_settings['dct_coefficient_count']]
       mfccs = tf.reshape(mfccs,[model_settings['spectrogram_length'], model_settings['dct_coefficient_count'], 1])
@@ -231,6 +257,7 @@ def prepare_background_data(bg_path,BACKGROUND_NOISE_DIR_NAME):
     raw_audio = tf.io.read_file(wav_path)
     audio = tf.audio.decode_wav(raw_audio)
     background_data.append(audio[0])
+    print(".")
   if not background_data:
     raise Exception('No background wav files were found in ' + search_path)
   return background_data
@@ -242,7 +269,6 @@ def get_training_data(Flags, get_waves=False, val_cal_subset=False):
   background_frequency = Flags.background_frequency
   background_volume_range_= Flags.background_volume
   model_settings = models.prepare_model_settings(label_count, Flags)
-
   bg_path=Flags.bg_path
   BACKGROUND_NOISE_DIR_NAME='_background_noise_' 
   background_data = prepare_background_data(bg_path,BACKGROUND_NOISE_DIR_NAME)
@@ -300,14 +326,10 @@ def get_training_data(Flags, get_waves=False, val_cal_subset=False):
     ds_test = ds_test.map(convert_dataset)
     ds_val = ds_val.map(convert_dataset)
 
-
-  for sample in ds_train.take(1):  # View first 5 samples
-    audio = sample[0]  # Extract audio tensor
-    mfcc_features = audio.numpy() # Shape (61, 13, 1)
-    # Remove the last dimension (1) to get (61, 13)
-    mfcc_features = mfcc_features.squeeze() 
-    print(f"MAX: {np.min(mfcc_features)}")
-    print(f"MIN: {np.max(mfcc_features)}")
+  # Normalise to 10 bit range
+  ds_train = ds_train.map(normalise_sample)
+  ds_test = ds_test.map(normalise_sample)
+  ds_val = ds_val.map(normalise_sample)
 
   # Now that we've acquired the preprocessed data, either by processing or loading,
   ds_train = ds_train.batch(Flags.batch_size)
@@ -327,4 +349,4 @@ if __name__ == '__main__':
     print("One element from the training set has shape:")
     print(f"Input tensor shape: {dat[0].shape}")
     print(f"Label shape: {dat[1].shape}")
-    print()
+    print(dat[0])

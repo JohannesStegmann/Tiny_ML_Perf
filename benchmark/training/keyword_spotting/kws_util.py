@@ -11,6 +11,8 @@ def parse_command():
       '--data_dir',
       type=str,
       default=os.path.join(os.getenv('HOME'), 'data'),
+    #   default = os.path.join(os.getenv('USERPROFILE'), 'data'),
+
       help="""\
       Where to download the speech training data to. Or where it is already saved.
       """)
